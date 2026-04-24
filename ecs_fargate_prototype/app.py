@@ -4,14 +4,14 @@ import os
 from flask import Flask, render_template_string
 from flask_restx import Api, Resource, fields
 
-from inference import predict_proba
+from inference import predict_popularity
 
 app = Flask(__name__)
 api = Api(
     app,
     version="1.0",
-    title="Phishing Prediction API",
-    description="Prototype API for phishing URL inference with scikit-learn.",
+    title="Spotify Popularity Prediction API",
+    description="Prototype API for batch Spotify popularity inference with scikit-learn.",
     doc="/",
 )
 
@@ -26,18 +26,49 @@ health_response = api.model(
     },
 )
 
+track_features = api.model(
+    "TrackFeatures",
+    {
+        "track_name": fields.String(required=True, description="Track name"),
+        "album_name": fields.String(required=True, description="Album name"),
+        "artists": fields.String(required=True, description="Comma-separated artist names"),
+        "track_genre": fields.String(required=True, description="Primary track genre"),
+        "duration_ms": fields.Float(required=True, description="Track duration in milliseconds"),
+        "explicit": fields.Boolean(required=True, description="Whether the track is explicit"),
+        "danceability": fields.Float(required=True, description="Danceability score"),
+        "energy": fields.Float(required=True, description="Energy score"),
+        "key": fields.Integer(required=True, description="Detected key"),
+        "loudness": fields.Float(required=True, description="Average loudness"),
+        "mode": fields.Integer(required=True, description="Major/minor mode"),
+        "speechiness": fields.Float(required=True, description="Speechiness score"),
+        "acousticness": fields.Float(required=True, description="Acousticness score"),
+        "instrumentalness": fields.Float(required=True, description="Instrumentalness score"),
+        "liveness": fields.Float(required=True, description="Liveness score"),
+        "valence": fields.Float(required=True, description="Valence score"),
+        "tempo": fields.Float(required=True, description="Estimated tempo"),
+        "time_signature": fields.Integer(required=True, description="Estimated time signature"),
+    },
+)
+
 predict_request = api.model(
     "PredictRequest",
     {
-        "url": fields.String(required=True, description="URL to analyze"),
+        "instances": fields.List(
+            fields.Nested(track_features),
+            required=True,
+            description="One or more Spotify track records to score",
+        ),
     },
 )
 
 predict_response = api.model(
     "PredictResponse",
     {
-        "url": fields.String(description="Normalized URL used for inference"),
-        "phishing_probability": fields.Float(description="Predicted phishing probability"),
+        "predictions": fields.List(
+            fields.Float(description="Predicted popularity score"),
+            description="Predicted popularity score for each input record",
+        ),
+        "count": fields.Integer(description="Number of records scored"),
     },
 )
 
@@ -48,7 +79,7 @@ class Health(Resource):
     def get(self):
         return {
             "status": "ok",
-            "service": "phishing-api",
+            "service": "spotify-popularity-api",
             "time": datetime.now(timezone.utc).isoformat(),
             "docs": "/",
             "status_page": "/status",
@@ -64,7 +95,7 @@ def status_page():
           <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Phishing API Status</title>
+            <title>Spotify Popularity API Status</title>
             <style>
               :root {
                 color-scheme: light dark;
@@ -134,10 +165,10 @@ def status_page():
           <body>
             <main class="card">
               <div class="badge"><span class="dot"></span>Healthy</div>
-              <h1>Phishing Prediction API</h1>
-              <p>The service is up and ready to score phishing URLs.</p>
+              <h1>Spotify Popularity Prediction API</h1>
+              <p>The service is up and ready to score Spotify tracks.</p>
               <section class="meta">
-                <div class="meta-row"><strong>Service</strong><span>phishing-api</span></div>
+                <div class="meta-row"><strong>Service</strong><span>spotify-popularity-api</span></div>
                 <div class="meta-row"><strong>Time (UTC)</strong><span>{{ timestamp }}</span></div>
                 <div class="meta-row"><strong>Swagger UI</strong><a href="/">Open docs</a></div>
                 <div class="meta-row"><strong>JSON healthcheck</strong><a href="/health">/health</a></div>
@@ -155,13 +186,18 @@ class Predict(Resource):
     @api.expect(predict_request, validate=True)
     @api.marshal_with(predict_response)
     def post(self):
-        url = api.payload["url"].strip()
-        if not url:
-            api.abort(400, "'url' must be a non-empty string.")
+        instances = api.payload["instances"]
+        if not instances:
+            api.abort(400, "'instances' must contain at least one record.")
+
+        try:
+            predictions = predict_popularity(instances)
+        except ValueError as error:
+            api.abort(400, str(error))
 
         return {
-            "url": url,
-            "phishing_probability": predict_proba(url),
+            "predictions": predictions,
+            "count": len(predictions),
         }, 200
 
 
